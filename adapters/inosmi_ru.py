@@ -16,6 +16,8 @@ def sanitize(html, plaintext=False):
     article.attrs = {}
 
     buzz_blocks = [
+        # *article.select('.article__title'),
+        # *article.select('.article__second-title'),
         *article.select('.article__notice'),
         *article.select('.article__aggr'),
         *article.select('aside'),

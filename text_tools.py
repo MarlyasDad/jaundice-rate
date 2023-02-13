@@ -3,7 +3,8 @@ import string
 
 
 def _clean_word(word):
-    word = word.replace('«', '').replace('»', '').replace('…', '')
+    word = word.replace('«', '').replace('»', '').replace('…', '')\
+        .replace('.', '').replace(',', '').replace('!', '').replace('?', '')
     # FIXME какие еще знаки пунктуации часто встречаются ?
     word = word.strip(string.punctuation)
     return word

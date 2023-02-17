@@ -15,9 +15,6 @@ from adapters.exceptions import ArticleNotFound
 import text_tools
 
 
-logging.basicConfig(level=logging.INFO)
-
-
 TEST_ARTICLES = [
     'http://inosmi.ru/economic/20190629/245384784.html',
     'https://lenta.ru/brief/2021/08/26/afg_terror/',
@@ -47,38 +44,53 @@ async def timeit():
 
 
 @timeit()
-async def process_article(article_url: str, morph: pymorphy2.MorphAnalyzer,
-                          charged_words: list, results: list):
-    async with aiohttp.ClientSession() as session:
-        try:
-            status = ProcessingStatus.OK
-            async with timeout(3):
+async def process_article(article_url: str, results: list,
+                          morph: pymorphy2.MorphAnalyzer, charged_words: list,
+                          fetch_timeout: float = 1.5, calc_timeout: float = 3):
+    status = ProcessingStatus.OK
+    try:
+        async with timeout(fetch_timeout):
+            async with aiohttp.ClientSession() as session:
                 html = await fetch(session, article_url)
-            sanitized_html = SANITIZERS['inosmi_ru'](html, plaintext=True)
-            text_words = text_tools.split_by_words(morph, sanitized_html)
+
+        sanitized_html = SANITIZERS['inosmi_ru'](html, plaintext=True)
+
+        async with timeout(calc_timeout):
+            text_words = await text_tools.split_by_words(morph, sanitized_html)
             rating = text_tools.calculate_jaundice_rate(text_words,
                                                         charged_words)
             words_count = len(text_words)
-        except aiohttp.InvalidURL:
-            status = ProcessingStatus.FETCH_ERROR
-            rating = None
-            words_count = None
-        except ArticleNotFound:
-            status = ProcessingStatus.PARSING_ERROR
-            rating = None
-            words_count = None
-        except asyncio.TimeoutError:
-            status = ProcessingStatus.TIMEOUT
-            rating = None
-            words_count = None
+    except aiohttp.InvalidURL:
+        status = ProcessingStatus.FETCH_ERROR
+        rating = None
+        words_count = None
+    except ArticleNotFound:
+        status = ProcessingStatus.PARSING_ERROR
+        rating = None
+        words_count = None
+    except asyncio.TimeoutError:
+        status = ProcessingStatus.TIMEOUT
+        rating = None
+        words_count = None
 
-        results.append((article_url, status, rating, words_count))
+    results.append({'url': article_url, 'status': status.value,
+                    'score': rating, 'words_count': words_count})
 
 
-def load_dictionary(morph: pymorphy2.MorphAnalyzer, path: str) -> list:
+def load_charged_words() -> list:
+    negative_text_path = './charged_dict/negative_words.txt'
+    negative_words = load_dictionary(negative_text_path)
+
+    positive_text_path = './charged_dict/positive_words.txt'
+    positive_words = load_dictionary(positive_text_path)
+
+    return negative_words + positive_words
+
+
+def load_dictionary(path: str) -> list:
     with open(path, 'r', encoding="utf8") as file:
         dictionary_text = file.read()
-    return text_tools.split_by_words(morph, dictionary_text)
+    return dictionary_text.split()
 
 
 async def fetch(session, url):
@@ -89,26 +101,21 @@ async def fetch(session, url):
 
 async def main():
     morph = pymorphy2.MorphAnalyzer()
-
-    negative_text_path = './charged_dict/negative_words.txt'
-    negative_words = load_dictionary(morph, negative_text_path)
-
-    positive_text_path = './charged_dict/positive_words.txt'
-    positive_words = load_dictionary(morph, positive_text_path)
-
-    charged_words = negative_words + positive_words
-
+    charged_words = load_charged_words()
     results_list = []
 
     async with create_task_group() as tg:
         for article_url in TEST_ARTICLES:
-            tg.start_soon(process_article, article_url, morph, charged_words,
-                          results_list)
+            tg.start_soon(process_article, article_url, results_list, morph,
+                          charged_words)
 
     for result in results_list:
-        print('URL:', result[0])
-        print('Статус:', result[1].value)
-        print('Рейтинг:', result[2])
-        print('Слов в статье:', result[3])
+        print('URL:', result['url'])
+        print('Статус:', result['status'])
+        print('Рейтинг:', result['score'])
+        print('Слов в статье:', result['words_count'])
 
-asyncio.run(main())
+
+if __name__ == '__main__':
+    logging.basicConfig(level=logging.INFO)
+    asyncio.run(main())

@@ -1,30 +1,21 @@
+import asyncio
+from functools import partial
 from enum import Enum
 import logging
 import time
 from contextlib import asynccontextmanager
 
 import aiohttp
-import asyncio
-
-import pymorphy2
+from aiohttp import web
+from aiohttp.web_exceptions import HTTPException, HTTPBadRequest
+from aiohttp.web_middlewares import middleware
 from anyio import create_task_group
+import pymorphy2
 from async_timeout import timeout
 
 from adapters import SANITIZERS
 from adapters.exceptions import ArticleNotFound
 import text_tools
-
-
-TEST_ARTICLES = [
-    'http://inosmi.ru/economic/20190629/245384784.html',
-    'https://lenta.ru/brief/2021/08/26/afg_terror/',
-    'retyui.com',
-    'https://inosmi.ru/20230213/luna-260489924.html',
-    'https://inosmi.ru/20230107/lednikovyy-period-259431903.html',
-    'https://inosmi.ru/20230104/kosmos-259431209.html',
-    'https://inosmi.ru/20221218/kosmos-258967420.html',
-    'https://inosmi.ru/20221210/kosmos-258664015.html',
-]
 
 
 class ProcessingStatus(Enum):
@@ -99,23 +90,70 @@ async def fetch(session, url):
         return await response.text()
 
 
-async def main():
-    morph = pymorphy2.MorphAnalyzer()
-    charged_words = load_charged_words()
-    results_list = []
+def test_process_article():
+    async def do_test():
+        morph = pymorphy2.MorphAnalyzer()
+        charged_words = load_charged_words()
+        results = []
+
+        url = 'retyui.com'
+        await process_article(url, results, morph, charged_words)
+        assert results[0]['status'] == 'FETCH_ERROR'
+
+        url = 'https://lenta.ru/brief/2021/08/26/afg_terror/'
+        await process_article(url, results, morph, charged_words)
+        assert results[1]['status'] == 'PARSING_ERROR'
+
+        url = 'http://inosmi.ru/economic/20190629/245384784.html'
+        await process_article(url, results, morph, charged_words,
+                              fetch_timeout=0.1)
+        assert results[2]['status'] == 'TIMEOUT'
+
+        url = 'http://inosmi.ru/economic/20190629/245384784.html'
+        await process_article(url, results, morph, charged_words,
+                              calc_timeout=0.001)
+        assert results[3]['status'] == 'TIMEOUT'
+
+    asyncio.run(do_test())
+
+
+async def handle(request):
+    urls_string = request.query.get('urls')
+    urls_list = urls_string.split(",")
+
+    if len(urls_list) > 0:
+        raise HTTPBadRequest(reason="too many urls in request, "
+                                    "should be 10 or less")
+
+    results = []
 
     async with create_task_group() as tg:
-        for article_url in TEST_ARTICLES:
-            tg.start_soon(process_article, article_url, results_list, morph,
-                          charged_words)
+        for article_url in urls_list:
+            tg.start_soon(request.app.process_article, article_url, results)
 
-    for result in results_list:
-        print('URL:', result['url'])
-        print('Статус:', result['status'])
-        print('Рейтинг:', result['score'])
-        print('Слов в статье:', result['words_count'])
+    return web.json_response(results, dumps=str)
+
+
+@middleware
+async def error_handling_middleware(request, handler):
+    try:
+        response = await handler(request)
+        return response
+    except HTTPException as e:
+        return web.json_response(status=e.status, data={'error': str(e)})
+    except Exception as e:
+        return web.json_response(status=500, data={'error': str(e)})
 
 
 if __name__ == '__main__':
-    logging.basicConfig(level=logging.INFO)
-    asyncio.run(main())
+    morph = pymorphy2.MorphAnalyzer()
+    charged_words = load_charged_words()
+
+    app = web.Application()
+    app.add_routes([web.get('/', handle), ])
+    app.process_article = partial(process_article, morph=morph,
+                                  charged_words=charged_words)
+
+    app.middlewares.append(error_handling_middleware)
+
+    web.run_app(app)

@@ -13,7 +13,7 @@ http://127.0.0.1:8080/?urls=https://inosmi.ru/20221218/kosmos-258967420.html,htt
 
 В ответ вы получите JSON:
 
-```json
+```javascript
 [
 	{
 		'url': 'https: //inosmi.ru/20221210/kosmos-258664015.html',
@@ -74,6 +74,10 @@ python -m pytest adapters/inosmi_ru.py
 
 ```
 python -m pytest text_tools.py
+```
+
+```
+python -m pytest main.py
 ```
 
 # Цели проекта

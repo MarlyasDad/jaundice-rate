@@ -1,6 +1,10 @@
+from enum import Enum
+import logging
+import time
+from contextlib import asynccontextmanager
+
 import aiohttp
 import asyncio
-from enum import Enum
 
 import pymorphy2
 from anyio import create_task_group
@@ -9,6 +13,9 @@ from async_timeout import timeout
 from adapters import SANITIZERS
 from adapters.exceptions import ArticleNotFound
 import text_tools
+
+
+logging.basicConfig(level=logging.INFO)
 
 
 TEST_ARTICLES = [
@@ -30,12 +37,22 @@ class ProcessingStatus(Enum):
     TIMEOUT = 'TIMEOUT'
 
 
+@asynccontextmanager
+async def timeit():
+    now = time.monotonic()
+    try:
+        yield
+    finally:
+        logging.info(f'Анализ закончен за {time.monotonic() - now:3.2f} сек')
+
+
+@timeit()
 async def process_article(article_url: str, morph: pymorphy2.MorphAnalyzer,
                           charged_words: list, results: list):
     async with aiohttp.ClientSession() as session:
         try:
             status = ProcessingStatus.OK
-            async with timeout(1.5):
+            async with timeout(3):
                 html = await fetch(session, article_url)
             sanitized_html = SANITIZERS['inosmi_ru'](html, plaintext=True)
             text_words = text_tools.split_by_words(morph, sanitized_html)
@@ -81,18 +98,17 @@ async def main():
 
     charged_words = negative_words + positive_words
 
-    results_tuples = []
+    results_list = []
 
     async with create_task_group() as tg:
         for article_url in TEST_ARTICLES:
             tg.start_soon(process_article, article_url, morph, charged_words,
-                          results_tuples)
+                          results_list)
 
-    for result_tuple in results_tuples:
-        print('URL:', result_tuple[0])
-        print('Статус:', result_tuple[1].value)
-        print('Рейтинг:', result_tuple[2])
-        print('Слов в статье:', result_tuple[3])
-
+    for result in results_list:
+        print('URL:', result[0])
+        print('Статус:', result[1].value)
+        print('Рейтинг:', result[2])
+        print('Слов в статье:', result[3])
 
 asyncio.run(main())
